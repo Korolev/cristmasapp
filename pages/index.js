@@ -11,9 +11,18 @@ import * as firebase from 'firebase';
 import {firebaseConfig} from '../firebase/firebase.config'
 
 
+const getLocalUserId = () => {
+    return window && window.localStorage.getItem('userId');
+};
+
+const setLocalUserId = (name) => {
+    return window && window.localStorage.setItem('userId', name);
+};
+
 const Index = () => {
-    const gamersApiUrl = 'https://cristmasapp-1d61d.firebaseio.com/gamers';
-    const [gamer, setGamer] = useState({name: '', score: 0});
+    // const gamersApiUrl = 'https://cristmasapp-1d61d.firebaseio.com/gamers';
+    const gamersApiUrl = '/player';
+    const [player, setPlayer] = useState({name: '', score: 0});
     const [viewState, setViewState] = useState({
         componentMount: false,
         loading: true,
@@ -21,10 +30,77 @@ const Index = () => {
         inputTouched: false,
         inputValid: true,
     });
+    const [wsInstance, setWsInstance] = useState(null);
 
-    const getLocalUserId = () => {
-        return  window.localStorage.getItem('userId');
-    };
+
+    useEffect(() => {
+        console.log('WS subscribe');
+        let ws;
+        if (!!window) {
+            ws = new WebSocket(`ws://${window.location.host.replace('3000', '8000')}/wss`);
+            setWsInstance(ws);
+
+            ws.onmessage = (message) => {
+                const data = JSON.parse(message.data);
+                switch (data.action) {
+                    case "updatePlayersList":
+                        Object.values(data.payload).forEach( p => {
+                            console.log('data', p.id, player.id, player);
+                            if(p.id === player.id){
+                                console.log('P',p);
+                                setPlayer(p);
+                            }
+                        })
+
+                        break;
+                }
+            }
+        }
+
+        return () => {
+            if (ws && ws.readyState !== 3) {
+                ws.close();
+            }
+        }
+    }, [viewState.loading])
+
+    useEffect(() => {
+        const userId = getLocalUserId();
+
+        if (!userId) {
+            setViewState({
+                ...viewState,
+                showLoginForm: true,
+                componentMount: true,
+                loading: false
+            })
+        } else if (!player.name) {
+            console.log(userId);
+            axios.get(gamersApiUrl + '/' + userId).then(response => {
+                let user = response.data;
+                console.log("user", user);
+                let showLoginForm = false;
+                if (user) {
+                    user.id = userId;
+                    console.log('USER', user);
+                    setPlayer(user);
+                } else {
+                    window.localStorage.clear();
+                    showLoginForm = true;
+                }
+
+                setViewState({
+                    ...viewState,
+                    showLoginForm,
+                    loading: false
+                })
+            }).catch(e => {
+                console.log(e)
+                setLocalUserId('');
+            })
+        }
+
+    }, []);
 
     const createGamer = () => {
         setViewState({
@@ -33,29 +109,23 @@ const Index = () => {
             loading: true
         });
 
-        axios.post(gamersApiUrl + '.json', {name: gamer.name, score: 0}).then(response => {
-            console.log(response);
-
-            if (response.data) {
-
-                setGamer({
-                    name: gamer.name,
-                    score: 0,
-                    id: response.data.name
-                });
+        axios.post(gamersApiUrl, {name: player.name, score: 0}).then(res => {
+            console.log('res.data',res.data);
+            if (res.data) {
+                setPlayer(res.data);
 
                 setViewState({
                     ...viewState,
                     showLoginForm: false,
                     loading: false
                 });
-                window.localStorage.setItem('userId', response.data.name);
+                setLocalUserId(res.data.id);
             }
         }).catch(e => console.log(e));
     };
 
     const onInputChange = (val) => {
-        setGamer({...gamer, name: val});
+        setPlayer({...player, name: val});
         setViewState({
             ...viewState,
             inputTouched: true,
@@ -63,102 +133,26 @@ const Index = () => {
         })
     };
 
-    useEffect(() => {
-        console.log('useEffect', viewState.componentMount);
-
-        if (!viewState.componentMount) {
-            const userId = getLocalUserId();
-
-            if (!userId) {
-                setViewState({
-                    ...viewState,
-                    showLoginForm: true,
-                    componentMount: true,
-                    loading: false
-                })
-            } else if (!gamer.name) {
-                console.log(userId);
-                axios.get(gamersApiUrl + '/' + userId + '.json').then(response => {
-                    let user = response.data;
-                    console.log(user);
-                    let showLoginForm = false;
-                    if (user) {
-                        user.id = userId;
-                        console.log('USER', user);
-                        setGamer(user);
-                    } else {
-                        window.localStorage.clear();
-                        showLoginForm = true;
-                    }
-
-                    setViewState({
-                        ...viewState,
-                        showLoginForm,
-                        loading: false
-                    })
-                }).catch(e => console.log(e))
-            }
-        }
-
-        // == firebase watch
-        if (firebaseApp && !firebaseApp.apps.length) {
-            firebaseApp.initializeApp(firebaseConfig);
-            let starCountRef = firebase.database().ref('gamers');
-
-            starCountRef.on('value', function (snapshot) {
-                let response = snapshot.val();
-                const userId = getLocalUserId();
-                console.log('resp AAA', response);
-                if(response && !response[userId]){
-                    setViewState({
-                        ...viewState,
-                        showLoginForm: true
-                    })
-                }else if(response){
-                    setGamer({
-                        ...gamer,
-                        ...response[userId],
-                        id: userId
-                    })
-                }
-            });
-        }
-        // == firebase watch
-    });
-
-    let waitTryResult = false;
     const tryAnswer = () => {
-        let userId = gamer.id;
+        let userId = player.id;
 
-        if(userId && !waitTryResult){
-            waitTryResult = true;
-            axios.patch(gamersApiUrl + '/' + userId + '.json', {
-                name: gamer.name,
-                score: gamer.score,
-                tryAnswerTime: new Date().getTime(),
-            }).then(response => {
-                let user = response.data;
-                setGamer({
-                    ...gamer,
-                    ...user
-                });
-
-                waitTryResult = false;
+        if (userId) {
+            axios.patch(gamersApiUrl + '/' + userId + '/answer').then(r => {
             }).catch(e => console.log(e))
         }
     };
-
+console.log("player.tryAnswerTime",player.tryAnswerTime);
     return (
         <Layout>
             <div className={'gameField'}>
-                <div className={'gamerScore'}>{gamer.score}</div>
-                <div className={'gamerName'}>{gamer.name}</div>
+                <div className={'gamerScore'}>{player.score}</div>
+                <div className={'gamerName'}>{player.name}</div>
                 <div>
                     <Button
                         size={'xl'}
                         type={'primary'}
                         onClick={tryAnswer}
-                        disabled={!!gamer.tryAnswerTime}
+                        disabled={!!player.tryAnswerTime}
                     >
                         Я знаю ответ!
                     </Button>
@@ -170,7 +164,7 @@ const Index = () => {
             {viewState.showLoginForm ? <Backdrop>
                 <div className={'gamerForm'}>
                     <Input label='Название команды'
-                           value={gamer.name}
+                           value={player.name}
                            onChange={(event) => onInputChange(event.target.value)}
                            shouldValidate={true}
                            touched={viewState.inputTouched}
@@ -178,49 +172,49 @@ const Index = () => {
                            errorMessage={'Значение не может быть пустым или короче 4х символов.'}
                     />
                     <Button disabled={!viewState.inputValid || !viewState.inputTouched} size={'l'} type={'success'}
-                            onClick={() => createGamer()}>Подтвердить!</Button>
+                            onClick={() => createGamer()}>Регистарция</Button>
                 </div>
             </Backdrop> : ''}
             <style jsx>{`
-                .gameField{
-                    text-align:center;
-                    font-size:3rem;
-                    display: flex;
-                    flex-direction: column;
-                    justify-content: center;
-                    height: 90vh;
-                }
-                                                
-                .gamerName{
-                    color: #eee;
-                    text-shadow: 1px 1px 1px #777;
-                    padding: 3rem 0;
-                }
-                
-                               
-                .gamerScore{
-                    color: lightblue;
-                    font-size:3rem;                    
-                }
-                
-                .gamerForm{
-                    position: absolute;
-                    top: 50%;
-                    left: 50%;                    
-                    margin-top: -150px;
-                    margin-left: -150px;
-                    width: 300px;
-                    height: 300px;
-                    padding: 5%;
-                    box-sizing: border-box;
-                    text-align: center;
-                    background: #fefefe;
-                    border-radius: 30px;
-                }
-                
-                .gamerForm input {
-                    margin: 2rem 0;                    
-                }
+              .gameField {
+                text-align: center;
+                font-size: 3rem;
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                height: 90vh;
+              }
+
+              .gamerName {
+                color: #eee;
+                text-shadow: 1px 1px 1px #777;
+                padding: 3rem 0;
+              }
+
+
+              .gamerScore {
+                color: lightblue;
+                font-size: 3rem;
+              }
+
+              .gamerForm {
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                margin-top: -150px;
+                margin-left: -150px;
+                width: 300px;
+                height: 300px;
+                padding: 24px;
+                box-sizing: border-box;
+                text-align: center;
+                background: #fefefe;
+                border-radius: 30px;
+              }
+
+              .gamerForm input {
+                margin: 2rem 0;
+              }
             `}</style>
         </Layout>
     );

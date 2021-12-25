@@ -202,7 +202,7 @@ const questionGroups = [
 ];
 
 export const prodQuestions = questionGroups.map( (group, gidx) => {
-    let groupId = gidx + new Date().getTime();
+    let groupId = gidx + Date.now();
     return {
         id: groupId,
         category: group.category,
